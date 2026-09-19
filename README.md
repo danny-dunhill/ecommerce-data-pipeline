@@ -6,9 +6,9 @@ and Docker.
 
 ![CI](https://github.com/danny-dunhill/ecommerce-data-pipeline/actions/workflows/ci.yml/badge.svg)
 
-> **Status:** work in progress. Milestones 1 to 5 are done: the pipeline runs from the CSV
-> files to a star schema and analytical views in PostgreSQL. Polish and an optional
-> dashboard are next, see the [roadmap](#roadmap).
+> **Status:** the core pipeline is complete (milestones 1 to 6): CSV files to a star schema
+> and analytical views in PostgreSQL, with tests and CI. An optional dashboard and Airflow
+> orchestration are next, see the [roadmap](#roadmap).
 
 ## Architecture
 
@@ -233,8 +233,35 @@ Two kinds of problems are treated differently on purpose:
 | `orders_have_items`          | warning  | every order has at least one item                      |
 | `products_have_category`     | warning  | every product has a category                           |
 
-The real Olist data has a few known oddities (orders without items, products without a
-category), so warnings there are expected: they are findings to report, not to hide.
+On the **full** dataset (`pipeline validate`) all 12 error checks pass and three
+warning checks report oddities of the source data:
+
+```text
+[OK  ] customers_key                      0 of 99441   customer_id is present and unique
+[OK  ] customers_have_unique_id           0 of 99441   customer_unique_id is present (it identifies the person)
+[OK  ] products_key                       0 of 32951   product_id is present and unique
+[OK  ] orders_key                         0 of 99441   order_id is present and unique
+[OK  ] order_items_key                    0 of 112650  (order_id, order_item_id) is present and unique
+[OK  ] orders_customer_exists             0 of 99441   every order belongs to a known customer
+[OK  ] items_order_exists                 0 of 112650  every order item belongs to a known order
+[OK  ] items_product_exists               0 of 112650  every order item refers to a known product
+[OK  ] orders_have_purchase_time          0 of 99441   every order has a purchase timestamp
+[OK  ] orders_status_known                0 of 99441   order_status is one of the known values
+[OK  ] items_amounts_valid                0 of 112650  price and freight_value are present and not negative
+[OK  ] payments_amount_valid              0 of 103886  payment_value is present and not negative
+[OK  ] delivery_after_purchase            0 of 99441   an order is not delivered before it was purchased
+[WARN] delivered_has_delivery_date        8 of 99441   orders with status 'delivered' have a delivery date
+[WARN] orders_have_items                775 of 99441   every order has at least one item
+[WARN] products_have_category           610 of 32951   every product has a category
+16 checks: 0 failed (errors), 3 warnings
+```
+
+Nothing is dropped or repaired: the 775 orders without items are simply not in the fact
+table (they have no revenue), the 610 products without a category get the category
+`unknown`, and the 8 "delivered" orders without a delivery date are reported. Two product
+categories (`pc_gamer` and `portateis_cozinha_e_preparadores_de_alimentos`) are missing in
+the translation file, so they keep their Portuguese name; the transform step logs this as a
+warning. The fact table has as many rows (112 650) as there are order items in the source.
 
 ## Star schema
 
@@ -360,7 +387,7 @@ skipped automatically if the database is not reachable, and they always run in C
 - [x] 3. Transform and validate: cleaning, typing, data-quality checks (`pipeline validate`)
 - [x] 4. Load: star schema with upserts (`pipeline load-warehouse`, `pipeline run`)
 - [x] 5. Analytics: SQL views (monthly revenue, top products, repeat customers) and `pipeline report`
-- [ ] 6. Polish: documentation, coverage, example results
+- [x] 6. Polish: documentation, test coverage (about 99 %), example results
 - [ ] 7. Optional: dashboard, Airflow orchestration
 
 ## License

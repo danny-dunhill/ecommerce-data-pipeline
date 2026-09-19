@@ -48,3 +48,12 @@ JOIN dw.dim_date AS d ON d.date_key = f.order_date_key
 WHERE f.delivered_at IS NOT NULL
 GROUP BY d.year, d.month
 ORDER BY d.year, d.month;
+
+-- 8. Reconciliation: does the warehouse hold every order item of the source?
+--    staging.order_items is the 1:1 copy of the CSV file, dw.fact_orders is the result.
+--    Both rows must show the same number of items and the same total price.
+SELECT 'staging (CSV copy)' AS layer, count(*) AS items, sum(price::numeric) AS total_price
+FROM staging.order_items
+UNION ALL
+SELECT 'dw.fact_orders', count(*), sum(price)
+FROM dw.fact_orders;
