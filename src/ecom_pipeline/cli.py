@@ -5,7 +5,8 @@ Exit codes, so that schedulers and CI can tell what happened:
 * 0: success
 * 1: database problem (unreachable, query failed)
 * 2: bad configuration or bad command-line arguments
-* 3: problem with the data (missing files, unexpected columns, row count mismatch)
+* 3: problem with the data (missing files, unexpected columns, row count mismatch,
+  failed data-quality checks)
 """
 
 import logging
@@ -22,8 +23,11 @@ from ecom_pipeline.config import ConfigError, Settings, get_settings
 from ecom_pipeline.db import check_connection, get_engine
 from ecom_pipeline.extract import ExtractError
 from ecom_pipeline.logging_setup import configure_logging
+from ecom_pipeline.quality import Severity, format_report, has_errors, run_checks
 from ecom_pipeline.sample import make_sample
-from ecom_pipeline.staging import LoadError, load_staging
+from ecom_pipeline.staging import LoadError, load_staging, read_staging
+from ecom_pipeline.tables import TABLES
+from ecom_pipeline.transform import INPUT_TABLES, TransformError, transform
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +113,36 @@ def load_staging_command(
         len(row_counts),
         sum(row_counts.values()),
     )
+
+
+@app.command()
+def validate() -> None:
+    """Clean the staging data and run the data-quality checks (nothing is written).
+
+    Exit code 3 if a blocking check fails. Warnings are shown but do not fail the command.
+    """
+    settings = _load_settings_or_exit()
+    engine = get_engine(settings)
+    try:
+        raw = read_staging(engine, [spec for spec in TABLES if spec.name in INPUT_TABLES])
+        results = run_checks(transform(raw))
+    except (LoadError, TransformError) as exc:
+        logger.error("%s", exc)
+        raise typer.Exit(code=3) from exc
+    except (SQLAlchemyError, psycopg.Error) as exc:
+        logger.error("Database error while reading staging (%s)", type(exc).__name__)
+        logger.debug("Full error", exc_info=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+    typer.echo(format_report(results))
+    if has_errors(results):
+        logger.error("Data-quality checks failed: the data must not be loaded")
+        raise typer.Exit(code=3)
+
+    warnings = sum(1 for r in results if r.severity is Severity.WARNING and not r.passed)
+    logger.info("Data-quality checks passed (%d warnings)", warnings)
 
 
 @app.command("make-sample")

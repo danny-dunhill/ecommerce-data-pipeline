@@ -8,6 +8,8 @@ a review comment with a comma, quotes and a line break inside one quoted field.
 import csv
 from pathlib import Path
 
+import pandas as pd
+
 from ecom_pipeline.tables import TABLES
 
 REVIEW_MESSAGE = 'Great product,\nvery "fast" delivery'
@@ -121,6 +123,22 @@ DATASET: dict[str, list[dict[str, str]]] = {
 
 # how many rows each table of DATASET has
 DATASET_ROW_COUNTS = {name: len(rows) for name, rows in DATASET.items()}
+
+
+def raw_frames() -> dict[str, pd.DataFrame]:
+    """The ``DATASET`` as DataFrames, the way they come out of the staging tables.
+
+    Every column is text and an empty value is a real missing value (``None``).
+    """
+    return {
+        spec.name: pd.DataFrame(
+            [{column: row.get(column) or None for column in spec.columns} for row in rows],
+            columns=list(spec.columns),
+            dtype=object,
+        )
+        for spec in TABLES
+        for rows in [DATASET[spec.name]]
+    }
 
 
 def write_csv(path: Path, header: list[str], rows: list[list[str]]) -> None:

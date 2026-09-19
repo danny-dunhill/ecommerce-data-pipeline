@@ -1,10 +1,12 @@
-.PHONY: help install lint format test up down check-db
+.PHONY: help install hooks lint format test up down check-db validate
 
 help:  ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
 
-install:  ## Install the package with dev tools and set up git hooks
+install:  ## Install the package with dev tools
 	pip install -e ".[dev]"
+
+hooks:  ## Enable git pre-commit hooks (needs a git repository: run `git init` first)
 	pre-commit install
 
 lint:  ## Check code style without changing files
@@ -26,3 +28,6 @@ down:  ## Stop PostgreSQL (data is kept in a Docker volume)
 
 check-db:  ## Verify the pipeline container can reach PostgreSQL
 	docker compose run --rm pipeline check-db
+
+validate:  ## Clean the staging data and run the data-quality checks
+	pipeline validate

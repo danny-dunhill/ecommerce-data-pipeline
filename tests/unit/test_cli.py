@@ -4,7 +4,8 @@ from typer.testing import CliRunner
 
 from ecom_pipeline import __version__
 from ecom_pipeline.cli import app
-from sample_data import write_dataset
+from ecom_pipeline.staging import LoadError
+from sample_data import raw_frames, write_dataset
 
 runner = CliRunner()
 
@@ -27,7 +28,7 @@ def isolated_environment(monkeypatch, tmp_path):
 def test_no_arguments_shows_help():
     result = runner.invoke(app, [])
 
-    for command in ("check-db", "load-staging", "make-sample", "version"):
+    for command in ("check-db", "load-staging", "validate", "make-sample", "version"):
         assert command in result.output
 
 
@@ -142,3 +143,60 @@ def test_make_sample_exits_with_code_3_when_source_files_are_missing(tmp_path):
     )
 
     assert result.exit_code == 3
+
+
+def test_validate_prints_the_report_and_succeeds_for_valid_data(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setattr("ecom_pipeline.cli.read_staging", lambda engine, tables: raw_frames())
+
+    result = runner.invoke(app, ["validate"])
+
+    assert result.exit_code == 0
+    assert "[OK  ] customers_key" in result.output
+    assert "[WARN] delivered_has_delivery_date" in result.output  # a warning does not fail
+    assert "Data-quality checks passed" in result.output
+
+
+def test_validate_exits_with_code_3_when_a_blocking_check_fails(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    raw = raw_frames()
+    raw["order_items"].loc[0, "price"] = "-5.00"
+    monkeypatch.setattr("ecom_pipeline.cli.read_staging", lambda engine, tables: raw)
+
+    result = runner.invoke(app, ["validate"])
+
+    assert result.exit_code == 3
+    assert "[FAIL] items_amounts_valid" in result.output
+
+
+def test_validate_exits_with_code_3_when_a_value_has_the_wrong_type(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    raw = raw_frames()
+    raw["order_items"].loc[0, "price"] = "twelve"
+    monkeypatch.setattr("ecom_pipeline.cli.read_staging", lambda engine, tables: raw)
+
+    result = runner.invoke(app, ["validate"])
+
+    assert result.exit_code == 3
+    assert "order_items.price" in result.output
+
+
+def test_validate_exits_with_code_3_when_staging_was_not_loaded(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+
+    def not_loaded(engine, tables):
+        raise LoadError("Staging tables not found. Run `pipeline load-staging` first.")
+
+    monkeypatch.setattr("ecom_pipeline.cli.read_staging", not_loaded)
+
+    result = runner.invoke(app, ["validate"])
+
+    assert result.exit_code == 3
+    assert "load-staging" in result.output
+
+
+def test_validate_exits_with_code_2_when_config_missing():
+    result = runner.invoke(app, ["validate"])
+
+    assert result.exit_code == 2
+    assert "Missing required environment variables" in result.output

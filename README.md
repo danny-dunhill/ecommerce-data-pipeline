@@ -6,8 +6,8 @@ and Docker.
 
 ![CI](https://github.com/danny-dunhill/ecommerce-data-pipeline/actions/workflows/ci.yml/badge.svg)
 
-> **Status:** work in progress. Milestones 1 (project skeleton) and 2 (extract and staging
-> load) are done, see the [roadmap](#roadmap).
+> **Status:** work in progress. Milestones 1 (project skeleton), 2 (extract and staging
+> load) and 3 (transform and data-quality checks) are done, see the [roadmap](#roadmap).
 
 ## Architecture
 
@@ -15,7 +15,7 @@ and Docker.
 flowchart LR
     A[Olist CSV files] --> B[Extract<br/>validate + COPY]
     B --> C[(PostgreSQL<br/>staging schema)]
-    C -.-> D[Transform + validate<br/>pandas]
+    C --> D[Transform + validate<br/>pandas]
     D -.-> E[(PostgreSQL<br/>star schema)]
     E -.-> F[Analytical SQL views]
 ```
@@ -79,6 +79,7 @@ revenue and product analysis, and the file has about one million rows.
 pipeline make-sample                          # build a small sample in data/sample (once)
 pipeline load-staging --data-dir data/sample  # load the sample into PostgreSQL
 pipeline load-staging                         # load the full data from data/raw
+pipeline validate                             # clean the staging data and run quality checks
 ```
 
 Run `pipeline --help` for all commands. Exit codes: `0` success, `1` database problem,
@@ -118,6 +119,44 @@ Design decisions:
 - **Empty values become `NULL`**, whether the CSV file wrote them as `""` or as nothing.
 - **Every row has `_loaded_at`**, the time of the load.
 
+## Transform and data quality
+
+`pipeline validate` reads the staging tables into pandas, cleans and types them
+(`transform.py`) and runs the data-quality checks (`quality.py`). It writes nothing, so it
+is always safe to run. Loading the star schema comes in the next milestone.
+
+Cleaning (every function is pure: DataFrame in, new DataFrame out):
+
+- text is trimmed, empty strings become missing values, state codes are upper-case,
+  cities title-case, zip codes stay 5-character text (a leading zero must survive)
+- timestamps and numbers get real types; money is rounded to cents
+- the misspelled source columns (`product_name_lenght`) are renamed
+- products get an English category name (falls back to the Portuguese name, then to
+  `unknown`)
+- **no row is ever dropped or silently "fixed"**
+
+Two kinds of problems are treated differently on purpose:
+
+- **Type problems** (a price that is not a number, an unknown timestamp format) stop the run
+  at once with a clear message: the source is not what we expect.
+- **Business-rule problems** are reported by the checks below, each with a severity.
+  A failed **error** blocks the pipeline (exit code 3); a **warning** is only reported.
+
+| Check                        | Severity | Rule                                                   |
+| ---------------------------- | -------- | ------------------------------------------------------ |
+| `customers_key`, `products_key`, `orders_key`, `order_items_key` | error | primary keys are present and unique |
+| `orders_customer_exists`, `items_order_exists`, `items_product_exists` | error | no orphan rows (foreign keys) |
+| `orders_have_purchase_time`  | error    | every order has a purchase timestamp                   |
+| `orders_status_known`        | error    | status is one of the 8 known values                    |
+| `items_amounts_valid`, `payments_amount_valid` | error | amounts are present and not negative     |
+| `delivery_after_purchase`    | warning  | an order is not delivered before it was purchased      |
+| `delivered_has_delivery_date`| warning  | "delivered" orders have a delivery date                |
+| `orders_have_items`          | warning  | every order has at least one item                      |
+| `products_have_category`     | warning  | every product has a category                           |
+
+The real Olist data has a few known oddities (orders without items, products without a
+category), so warnings there are expected: they are findings to report, not to hide.
+
 ## Development
 
 ```bash
@@ -133,7 +172,7 @@ skipped automatically if the database is not reachable, and they always run in C
 
 - [x] 1. Project skeleton: config, logging, CLI, Docker Compose, CI, tests
 - [x] 2. Extract: validate the CSV files and load them into a staging schema (idempotent)
-- [ ] 3. Transform and validate: cleaning, data quality checks
+- [x] 3. Transform and validate: cleaning, typing, data-quality checks (`pipeline validate`)
 - [ ] 4. Load: star schema with upserts
 - [ ] 5. Analytics: SQL views (monthly revenue, top products, repeat customers)
 - [ ] 6. Polish: documentation, coverage, example results

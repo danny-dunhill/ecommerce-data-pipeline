@@ -15,6 +15,9 @@ Design decisions:
   transactional DDL). If anything fails, the previous state stays untouched.
 * **Reconciled:** after each load, the number of rows in the database must equal the
   number of records in the CSV file, otherwise the load fails and is rolled back.
+
+The module also has the read side, ``read_staging``, which hands the tables to the
+transform step as DataFrames.
 """
 
 import logging
@@ -22,8 +25,9 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+import pandas as pd
 from psycopg import errors as psycopg_errors
-from sqlalchemy import Connection, Engine, text
+from sqlalchemy import Connection, Engine, inspect, text
 
 from ecom_pipeline.extract import count_records, validate_sources
 from ecom_pipeline.tables import TABLES, TableSpec
@@ -89,6 +93,34 @@ def load_staging(
         for spec in tables:
             row_counts[spec.name] = _reload_table(connection, spec, sources[spec.name])
     return row_counts
+
+
+def read_staging(engine: Engine, tables: Sequence[TableSpec] = TABLES) -> dict[str, pd.DataFrame]:
+    """Read staging tables into DataFrames (all columns are still text).
+
+    The ``_loaded_at`` bookkeeping column is left out: only the source columns are read.
+
+    Raises:
+        LoadError: if a staging table does not exist yet (``load-staging`` was not run).
+    """
+    inspector = inspect(engine)
+    missing = [
+        qualified_name(spec)
+        for spec in tables
+        if not inspector.has_table(spec.name, schema=STAGING_SCHEMA)
+    ]
+    if missing:
+        raise LoadError(
+            f"Staging tables not found: {', '.join(missing)}. Run `pipeline load-staging` first."
+        )
+
+    frames: dict[str, pd.DataFrame] = {}
+    with engine.connect() as connection:
+        for spec in tables:
+            query = f"SELECT {', '.join(spec.columns)} FROM {qualified_name(spec)}"
+            frames[spec.name] = pd.read_sql_query(text(query), connection)
+            logger.debug("Read %d rows from %s", len(frames[spec.name]), qualified_name(spec))
+    return frames
 
 
 def _reload_table(connection: Connection, spec: TableSpec, csv_path: Path) -> int:
