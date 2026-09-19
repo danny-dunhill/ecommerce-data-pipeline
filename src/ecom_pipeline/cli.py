@@ -68,6 +68,17 @@ class ReportName(StrEnum):
     REPEAT_CUSTOMERS = "repeat-customers"
 
 
+def _reason(exc: Exception) -> str:
+    """Why a database call failed: the first line of the driver's message.
+
+    SQLAlchemy wraps the driver error in ``exc.orig`` and adds the SQL text and parameters
+    to its own message, so only the driver's first line is shown. For a failed login that is
+    e.g. ``password authentication failed for user "ecom"`` (libpq never echoes the password).
+    """
+    lines = str(getattr(exc, "orig", None) or exc).strip().splitlines()
+    return lines[0] if lines else type(exc).__name__
+
+
 @contextmanager
 def _database(action: str) -> Iterator[Engine]:
     """Give a command an engine, and turn known failures into exit codes.
@@ -82,7 +93,7 @@ def _database(action: str) -> Iterator[Engine]:
         logger.error("%s", exc)
         raise typer.Exit(code=3) from exc
     except (SQLAlchemyError, psycopg.Error) as exc:
-        logger.error("Database error while %s (%s)", action, type(exc).__name__)
+        logger.error("Database error while %s: %s", action, _reason(exc))
         logger.debug("Full error", exc_info=True)
         raise typer.Exit(code=1) from exc
     finally:
@@ -142,7 +153,7 @@ def check_db() -> None:
     try:
         check_connection(engine)
     except SQLAlchemyError as exc:
-        logger.error("Cannot connect to %s (%s)", target, type(exc).__name__)
+        logger.error("Cannot connect to %s: %s", target, _reason(exc))
         logger.debug("Full error", exc_info=True)
         raise typer.Exit(code=1) from exc
     finally:

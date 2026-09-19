@@ -90,6 +90,7 @@ def test_password_is_never_logged(monkeypatch):
 
     assert result.exit_code == 1
     assert "Cannot connect" in result.output
+    assert "connection refused" in result.output  # the reason is shown
     assert "super-secret-value" not in result.output
 
 
@@ -339,6 +340,25 @@ def test_report_exits_with_code_3_when_the_warehouse_was_not_loaded(monkeypatch)
 
     assert result.exit_code == 3
     assert "pipeline run" in result.output
+
+
+def test_database_errors_show_the_reason_from_the_driver(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    reason = 'FATAL:  password authentication failed for user "ecom"'
+
+    def refused(engine, report, limit):
+        raise OperationalError(
+            "SELECT secret_query", {"p": "x"}, Exception(f"{reason}\nmore detail")
+        )
+
+    monkeypatch.setattr("ecom_pipeline.cli.fetch_report", refused)
+
+    result = runner.invoke(app, ["report", "top-products"])
+
+    assert result.exit_code == 1
+    assert "password authentication failed" in result.output
+    assert "secret_query" not in result.output  # SQL text and parameters stay out of the log
+    assert "more detail" not in result.output  # only the first line is shown
 
 
 def test_report_rejects_an_unknown_report_name():
