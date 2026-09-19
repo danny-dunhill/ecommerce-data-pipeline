@@ -1,4 +1,4 @@
-.PHONY: help install hooks lint format test up down check-db validate
+.PHONY: help install hooks lint format test up down check-db validate demo
 
 help:  ## Show available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
@@ -31,3 +31,6 @@ check-db:  ## Verify the pipeline container can reach PostgreSQL
 
 validate:  ## Clean the staging data and run the data-quality checks
 	pipeline validate
+
+demo:  ## Run the whole pipeline on the small sample data (needs `make up` first)
+	pipeline run --data-dir data/sample

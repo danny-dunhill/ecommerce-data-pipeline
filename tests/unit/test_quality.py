@@ -61,6 +61,12 @@ def test_duplicate_customer_id_is_an_error(clean):
     assert has_errors(run_checks(data))
 
 
+def test_customer_without_unique_id_is_an_error(clean):
+    customers = with_value(clean.customers, 0, "customer_unique_id", pd.NA)
+
+    assert failed(replace(clean, customers=customers), "customers_have_unique_id") == 1
+
+
 def test_missing_order_id_is_an_error(clean):
     orders = with_value(clean.orders, 0, "order_id", pd.NA)
 

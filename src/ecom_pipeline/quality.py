@@ -85,6 +85,16 @@ def _customers_key(data: CleanData) -> CheckResult:
     )
 
 
+def _customers_have_unique_id(data: CleanData) -> CheckResult:
+    return CheckResult(
+        "customers_have_unique_id",
+        Severity.ERROR,
+        "customer_unique_id is present (it identifies the person)",
+        _count(data.customers["customer_unique_id"].isna()),
+        len(data.customers),
+    )
+
+
 def _products_key(data: CleanData) -> CheckResult:
     return CheckResult(
         "products_key",
@@ -248,6 +258,7 @@ def _products_have_category(data: CleanData) -> CheckResult:
 
 _CHECKS: tuple[Check, ...] = (
     _customers_key,
+    _customers_have_unique_id,
     _products_key,
     _orders_key,
     _order_items_key,

@@ -28,7 +28,15 @@ def isolated_environment(monkeypatch, tmp_path):
 def test_no_arguments_shows_help():
     result = runner.invoke(app, [])
 
-    for command in ("check-db", "load-staging", "validate", "make-sample", "version"):
+    for command in (
+        "check-db",
+        "load-staging",
+        "validate",
+        "load-warehouse",
+        "run",
+        "make-sample",
+        "version",
+    ):
         assert command in result.output
 
 
@@ -200,3 +208,96 @@ def test_validate_exits_with_code_2_when_config_missing():
 
     assert result.exit_code == 2
     assert "Missing required environment variables" in result.output
+
+
+def patch_staging_data(monkeypatch, raw=None):
+    """Make the commands read ``raw`` (default: valid data) instead of a real database."""
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    monkeypatch.setattr(
+        "ecom_pipeline.cli.read_staging", lambda engine, tables: raw or raw_frames()
+    )
+
+
+def test_load_warehouse_loads_valid_data(monkeypatch):
+    patch_staging_data(monkeypatch)
+    loaded = []
+
+    def fake_load(engine, clean):
+        loaded.append(clean)
+        return {"fact_orders": 4, "dim_date": 365}
+
+    monkeypatch.setattr("ecom_pipeline.cli.load_warehouse", fake_load)
+
+    result = runner.invoke(app, ["load-warehouse"])
+
+    assert result.exit_code == 0
+    assert len(loaded) == 1
+    assert "Warehouse load finished: 2 tables, 369 rows processed (2 quality warnings)" in (
+        result.output
+    )
+
+
+def test_load_warehouse_does_not_load_anything_when_a_blocking_check_fails(monkeypatch):
+    raw = raw_frames()
+    raw["order_items"].loc[0, "price"] = "-5.00"
+    patch_staging_data(monkeypatch, raw)
+
+    def must_not_be_called(engine, clean):
+        raise AssertionError("the warehouse must not be loaded")
+
+    monkeypatch.setattr("ecom_pipeline.cli.load_warehouse", must_not_be_called)
+
+    result = runner.invoke(app, ["load-warehouse"])
+
+    assert result.exit_code == 3
+    assert "[FAIL] items_amounts_valid" in result.output
+    assert "nothing was loaded" in result.output
+
+
+def test_load_warehouse_exits_with_code_3_when_staging_was_not_loaded(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+
+    def not_loaded(engine, tables):
+        raise LoadError("Staging tables not found. Run `pipeline load-staging` first.")
+
+    monkeypatch.setattr("ecom_pipeline.cli.read_staging", not_loaded)
+
+    result = runner.invoke(app, ["load-warehouse"])
+
+    assert result.exit_code == 3
+    assert "load-staging" in result.output
+
+
+def test_load_warehouse_exits_with_code_2_when_config_missing():
+    result = runner.invoke(app, ["load-warehouse"])
+
+    assert result.exit_code == 2
+
+
+def test_run_loads_staging_then_the_warehouse(monkeypatch, tmp_path):
+    patch_staging_data(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        "ecom_pipeline.cli.load_staging",
+        lambda engine, data_dir: calls.append(("staging", data_dir)) or {"orders": 3},
+    )
+    monkeypatch.setattr(
+        "ecom_pipeline.cli.load_warehouse",
+        lambda engine, clean: calls.append(("warehouse", None)) or {"fact_orders": 4},
+    )
+
+    result = runner.invoke(app, ["run", "--data-dir", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert calls == [("staging", tmp_path), ("warehouse", None)]
+
+
+def test_run_stops_with_code_3_when_source_files_are_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+
+    result = runner.invoke(app, ["run", "--data-dir", str(empty_dir)])
+
+    assert result.exit_code == 3
+    assert "file not found" in result.output

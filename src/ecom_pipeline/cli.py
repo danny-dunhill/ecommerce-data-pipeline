@@ -11,11 +11,14 @@ Exit codes, so that schedulers and CI can tell what happened:
 
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import psycopg
 import typer
 from dotenv import find_dotenv, load_dotenv
+from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from ecom_pipeline import __version__
@@ -23,11 +26,18 @@ from ecom_pipeline.config import ConfigError, Settings, get_settings
 from ecom_pipeline.db import check_connection, get_engine
 from ecom_pipeline.extract import ExtractError
 from ecom_pipeline.logging_setup import configure_logging
-from ecom_pipeline.quality import Severity, format_report, has_errors, run_checks
+from ecom_pipeline.quality import (
+    CheckResult,
+    Severity,
+    format_report,
+    has_errors,
+    run_checks,
+)
 from ecom_pipeline.sample import make_sample
 from ecom_pipeline.staging import LoadError, load_staging, read_staging
 from ecom_pipeline.tables import TABLES
-from ecom_pipeline.transform import INPUT_TABLES, TransformError, transform
+from ecom_pipeline.transform import INPUT_TABLES, CleanData, TransformError, transform
+from ecom_pipeline.warehouse import load_warehouse
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +55,55 @@ def _load_settings_or_exit() -> Settings:
     except ConfigError as exc:
         logger.error("%s", exc)
         raise typer.Exit(code=2) from exc
+
+
+@contextmanager
+def _database(action: str) -> Iterator[Engine]:
+    """Give a command an engine, and turn known failures into exit codes.
+
+    Data problems (bad files, failed checks) exit with 3, database problems with 1.
+    The engine is always closed at the end.
+    """
+    engine = get_engine(_load_settings_or_exit())
+    try:
+        yield engine
+    except (ExtractError, LoadError, TransformError) as exc:
+        logger.error("%s", exc)
+        raise typer.Exit(code=3) from exc
+    except (SQLAlchemyError, psycopg.Error) as exc:
+        logger.error("Database error while %s (%s)", action, type(exc).__name__)
+        logger.debug("Full error", exc_info=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        engine.dispose()
+
+
+def _warning_count(results: list[CheckResult]) -> int:
+    return sum(1 for r in results if r.severity is Severity.WARNING and not r.passed)
+
+
+def _read_clean_data(engine: Engine) -> tuple[CleanData, list[CheckResult]]:
+    """Read staging, clean it and run the checks. Prints the report."""
+    raw = read_staging(engine, [spec for spec in TABLES if spec.name in INPUT_TABLES])
+    clean = transform(raw)
+    results = run_checks(clean)
+    typer.echo(format_report(results))
+    return clean, results
+
+
+def _load_validated_warehouse(engine: Engine) -> None:
+    """Load the warehouse, but only if there is no failed blocking check."""
+    clean, results = _read_clean_data(engine)
+    if has_errors(results):
+        logger.error("Data-quality checks failed: nothing was loaded into the warehouse")
+        raise typer.Exit(code=3)
+    row_counts = load_warehouse(engine, clean)
+    logger.info(
+        "Warehouse load finished: %d tables, %d rows processed (%d quality warnings)",
+        len(row_counts),
+        sum(row_counts.values()),
+        _warning_count(results),
+    )
 
 
 @app.callback()
@@ -94,19 +153,8 @@ def load_staging_command(
     ),
 ) -> None:
     """Load the raw CSV files into the PostgreSQL `staging` schema (safe to re-run)."""
-    settings = _load_settings_or_exit()
-    engine = get_engine(settings)
-    try:
+    with _database("loading staging") as engine:
         row_counts = load_staging(engine, data_dir)
-    except (ExtractError, LoadError) as exc:
-        logger.error("%s", exc)
-        raise typer.Exit(code=3) from exc
-    except (SQLAlchemyError, psycopg.Error) as exc:
-        logger.error("Database error while loading staging (%s)", type(exc).__name__)
-        logger.debug("Full error", exc_info=True)
-        raise typer.Exit(code=1) from exc
-    finally:
-        engine.dispose()
 
     logger.info(
         "Staging load finished: %d tables, %d rows in total",
@@ -121,28 +169,38 @@ def validate() -> None:
 
     Exit code 3 if a blocking check fails. Warnings are shown but do not fail the command.
     """
-    settings = _load_settings_or_exit()
-    engine = get_engine(settings)
-    try:
-        raw = read_staging(engine, [spec for spec in TABLES if spec.name in INPUT_TABLES])
-        results = run_checks(transform(raw))
-    except (LoadError, TransformError) as exc:
-        logger.error("%s", exc)
-        raise typer.Exit(code=3) from exc
-    except (SQLAlchemyError, psycopg.Error) as exc:
-        logger.error("Database error while reading staging (%s)", type(exc).__name__)
-        logger.debug("Full error", exc_info=True)
-        raise typer.Exit(code=1) from exc
-    finally:
-        engine.dispose()
+    with _database("reading staging") as engine:
+        _, results = _read_clean_data(engine)
 
-    typer.echo(format_report(results))
     if has_errors(results):
         logger.error("Data-quality checks failed: the data must not be loaded")
         raise typer.Exit(code=3)
+    logger.info("Data-quality checks passed (%d warnings)", _warning_count(results))
 
-    warnings = sum(1 for r in results if r.severity is Severity.WARNING and not r.passed)
-    logger.info("Data-quality checks passed (%d warnings)", warnings)
+
+@app.command("load-warehouse")
+def load_warehouse_command() -> None:
+    """Load the star schema from the staging tables (validates first, safe to re-run)."""
+    with _database("loading the warehouse") as engine:
+        _load_validated_warehouse(engine)
+
+
+@app.command()
+def run(
+    data_dir: Path = typer.Option(
+        Path("data/raw"),
+        "--data-dir",
+        "-d",
+        exists=True,
+        file_okay=False,
+        readable=True,
+        help="Folder with the Olist CSV files (use data/sample for the small sample).",
+    ),
+) -> None:
+    """Run the whole pipeline: CSV files -> staging -> validation -> star schema."""
+    with _database("running the pipeline") as engine:
+        load_staging(engine, data_dir)
+        _load_validated_warehouse(engine)
 
 
 @app.command("make-sample")
