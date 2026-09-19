@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ecom-pipeline"
+version = "0.1.0"
+description = "End-to-end e-commerce ETL pipeline: raw CSV -> PostgreSQL star schema -> analytical SQL views."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Danny Dunhill" }]
+dependencies = [
+    "pandas>=2.2",
+    "python-dotenv>=1.0",
+    "psycopg[binary]>=3.2",
+    "SQLAlchemy>=2.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit>=3.8",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+pipeline = "ecom_pipeline.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ecom_pipeline"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/F = pycodestyle + pyflakes, I = import sorting, UP = modern Python syntax,
+# B = likely bugs, SIM = simplifications
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --cov=ecom_pipeline --cov-report=term-missing"
+markers = [
+    "integration: needs a running PostgreSQL (start it with `make up`)",
+]

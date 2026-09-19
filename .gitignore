@@ -1,0 +1,27 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Tooling caches and reports
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Data: the full dataset is downloaded locally, only the small sample is committed
+data/raw/*
+!data/raw/.gitkeep
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
