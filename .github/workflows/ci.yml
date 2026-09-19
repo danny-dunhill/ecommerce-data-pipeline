@@ -48,3 +48,27 @@ jobs:
 
       - name: Test
         run: pytest
+
+      - name: Validate the Docker Compose file
+        run: docker compose --profile airflow config --quiet
+
+  airflow-dag:
+    # The Airflow DAG is loaded by Airflow itself, so that a broken DAG is found here and not
+    # in the web UI. Airflow is installed with the constraints file the Airflow project
+    # publishes for this version, which is their recommended way.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Airflow
+        run: |
+          pip install pytest "apache-airflow==3.3.2" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt"
+
+      - name: Test the DAG
+        run: pytest airflow/tests -o addopts="" -p no:cacheprovider

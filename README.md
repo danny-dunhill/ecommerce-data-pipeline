@@ -7,8 +7,8 @@ and Docker.
 ![CI](https://github.com/danny-dunhill/ecommerce-data-pipeline/actions/workflows/ci.yml/badge.svg)
 
 > **Status:** the core pipeline is complete (milestones 1 to 6): CSV files to a star schema
-> and analytical views in PostgreSQL, with tests and CI. An optional dashboard and Airflow
-> orchestration are next, see the [roadmap](#roadmap).
+> and analytical views in PostgreSQL, with tests and CI. Airflow orchestration is
+> added on top, see the [roadmap](#roadmap).
 
 ## Architecture
 
@@ -22,7 +22,8 @@ flowchart LR
     F -.-> G[Dashboard]
 ```
 
-Solid arrows are implemented, dotted arrows are planned. The star schema contains
+Solid arrows are implemented, dotted arrows are planned. Airflow can run the whole flow, from
+the first check to the reports, every night (see [Orchestration with Airflow](#orchestration-with-airflow)). The star schema contains
 `fact_orders`, `dim_customers`, `dim_products` and `dim_date`.
 
 ## Tech stack
@@ -369,6 +370,59 @@ for `monthly-revenue` it keeps the *latest* N months). More queries you can run 
 client are in [`sql/example_queries.sql`](sql/example_queries.sql): revenue by state and
 category, weekday versus weekend, delivery time.
 
+## Orchestration with Airflow
+
+The whole pipeline can also run on a schedule with [Apache Airflow](https://airflow.apache.org/)
+(3.3). It is optional: it lives behind a Docker Compose profile, so a normal
+`docker compose up -d` does not start it.
+
+```powershell
+docker compose --profile airflow up -d --build    # the first build takes a few minutes
+docker compose --profile airflow ps               # wait until airflow-apiserver is healthy
+```
+
+Open <http://localhost:8080> (user `airflow`, password `airflow`, demo values for a local
+machine), switch the `ecommerce_pipeline` DAG on and start it with the play button. The
+`dataset` parameter chooses the folder under `data/`: `sample` (default, part of the
+repository) or `raw` (the full dataset). The DAG is scheduled every day at 03:00 UTC. Stop
+everything with `docker compose --profile airflow down`. Docker should have at least 4 GB of
+memory for this.
+
+![A successful Airflow run: all seven tasks are green and the log of the monthly revenue report is open](docs/images/airflow-run.png)
+
+*A run on the sample data: every task succeeded, and the log of `report_monthly_revenue` shows the report.*
+
+```mermaid
+flowchart LR
+    A[check_db] --> B[load_staging] --> C[validate] --> D[load_warehouse]
+    D --> E[report_monthly_revenue]
+    D --> F[report_top_products]
+    D --> G[report_repeat_customers]
+```
+
+Design decisions:
+
+- **A thin DAG.** Every task calls one command of the `pipeline` CLI, so there is a single
+  code path: what Airflow runs is exactly what you run by hand. Airflow only adds the
+  schedule, the order, retries, logs and the web UI.
+- **The steps are plain data**, in [`airflow/dags/pipeline_steps.py`](airflow/dags/pipeline_steps.py),
+  without any Airflow import. Unit tests check that every step is a real `pipeline` command
+  with valid options, so the DAG cannot drift away from the CLI. A separate CI job loads the
+  real DAG with Airflow itself.
+- **Validation is a gate.** `load_warehouse` starts only after `validate` succeeded. Bad data
+  gives exit code 3, which Airflow shows as a failed task, and nothing reaches the
+  warehouse. `validate` is not retried (bad data stays bad); the database check and the
+  loads are, because they are idempotent and atomic.
+- **The pipeline has its own virtualenv** in the Airflow image. Airflow pins many libraries,
+  and installing the pipeline next to them could break either one.
+- **Airflow's bookkeeping is in a separate database** (`airflow-db`), not in the warehouse.
+- **`LocalExecutor`** runs the tasks on the same machine and needs no Redis or Celery. A
+  cluster would use another executor.
+- **`max_active_runs=1` and `catchup=False`.** Two runs at once would drop and re-create the
+  same staging tables, and every load is a full refresh, so replaying missed days is useless.
+- **Local use only.** The demo passwords and the JWT secret in `docker-compose.yml` must be
+  changed before Airflow is reachable from a network.
+
 ## Development
 
 ```bash
@@ -388,7 +442,8 @@ skipped automatically if the database is not reachable, and they always run in C
 - [x] 4. Load: star schema with upserts (`pipeline load-warehouse`, `pipeline run`)
 - [x] 5. Analytics: SQL views (monthly revenue, top products, repeat customers) and `pipeline report`
 - [x] 6. Polish: documentation, test coverage (about 99 %), example results
-- [ ] 7. Optional: dashboard, Airflow orchestration
+- [x] 7. Orchestration with Airflow (Docker Compose profile `airflow`)
+- [ ] 8. Optional: dashboard
 
 ## License
 
