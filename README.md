@@ -93,6 +93,78 @@ Run `pipeline --help` for all commands. Exit codes: `0` success, `1` database pr
 `2` bad configuration or arguments, `3` problem with the data (missing files, unexpected
 columns, row count mismatch).
 
+## Example results
+
+These results come from one run on the **full** Olist dataset (`pipeline run --data-dir data/raw`,
+about 100 000 orders). The warehouse load processed 246 138 rows in about 40 seconds on a
+personal computer with Docker Desktop, and the data-quality checks found no blocking errors.
+
+| Table                | Rows    |
+| -------------------- | ------- |
+| `dw.dim_date`        | 1 096   |
+| `dw.dim_customers`   | 99 441  |
+| `dw.dim_products`    | 32 951  |
+| `dw.fact_orders`     | 112 650 |
+
+`pipeline report monthly-revenue --limit 13` (revenue is the item price without freight;
+canceled and unavailable orders are not counted):
+
+```text
+year  month  month_start  orders  items       revenue     freight  avg_order_value  revenue_growth_pct
+----  -----  -----------  ------  -----  ------------  ----------  ---------------  ------------------
+2017      9  2017-09-01     4227   4815    621,415.91   95,686.81           147.01                9.40
+2017     10  2017-10-01     4547   5300    660,179.62  104,576.41           145.19                6.20
+2017     11  2017-11-01     7421   8626  1,003,862.14  168,329.54           135.27               52.10
+2017     12  2017-12-01     5618   6300    742,183.79  119,342.98           132.11              -26.10
+2018      1  2018-01-01     7187   8173    945,456.29  156,463.72           131.55               27.40
+2018      2  2018-02-01     6624   7597    837,895.43  141,590.73           126.49              -11.40
+2018      3  2018-03-01     7168   8195    981,051.06  171,605.93           136.87               17.10
+2018      4  2018-04-01     6919   7957    993,592.98  162,655.91           143.60                1.30
+2018      5  2018-05-01     6833   7898    992,871.75  152,814.71           145.31               -0.10
+2018      6  2018-06-01     6145   7060    863,265.53  157,116.37           140.48              -13.10
+2018      7  2018-07-01     6233   7039    878,044.27  161,739.31           140.87                1.70
+2018      8  2018-08-01     6421   7216    848,860.10  148,113.41           132.20               -3.30
+2018      9  2018-09-01        1      1        145.00       21.46           145.00             -100.00
+```
+
+`pipeline report top-products --limit 10`:
+
+```text
+revenue_rank  product_id                        category               units_sold  orders    revenue
+------------  --------------------------------  ---------------------  ----------  ------  ---------
+           1  bb50f2e236e5eea0100680137654686c  health_beauty                 195     187  63,885.00
+           2  6cdd53843498f92890544667809f1595  health_beauty                 156     151  54,730.20
+           3  d6160fb7873f184099d9bc95e30376af  computers                      35      35  48,899.34
+           4  d1c427060a0f73f6b889a5c7c61f2ac4  computers_accessories         341     321  46,916.51
+           5  99a4788cb24856965c36a24e339b6058  bed_bath_table                487     466  42,938.66
+           6  3dd2a17168ec895c781a9191c1e95ad7  computers_accessories         274     255  41,082.60
+           7  25c38557cf793876c5abdd5931f922db  baby                           38      38  38,907.32
+           8  5f504b3a1c75b73d6151be81eb05bdc9  cool_stuff                     63      63  37,733.90
+           9  53b36df67ebb7c41585e8d54d6772e08  watches_gifts                 323     306  37,683.42
+          10  aca2eb7d00ea1a7b8ebd4e68314663af  furniture_decor               527     431  37,608.90
+```
+
+`pipeline report repeat-customers`:
+
+```text
+customers  repeat_customers  repeat_rate_pct  repeat_revenue_share_pct
+---------  ----------------  ---------------  ------------------------
+    94983              2887             3.04                      5.60
+```
+
+What the numbers say:
+
+- Monthly revenue grew from about 120 000 in January 2017 to about 1 million in November
+  2017, the month of Black Friday. In 2018 it stays between roughly 850 000 and 990 000.
+- The dataset practically ends in August 2018: September 2018 has one order, which is why
+  its growth is -100 %. The first months of the dataset are just as thin, so their growth
+  percentages are huge and not meaningful. That is why the table above starts in
+  September 2017.
+- Only **3 % of the customers ordered more than once**, and they bring 5.6 % of the
+  revenue. Most of the revenue comes from first-time buyers.
+- Revenue and popularity are different rankings: the third best product sold 35 units, the
+  fifth sold 487.
+
 ## Staging layer
 
 `pipeline load-staging` copies each CSV file 1:1 into a table of the `staging` schema:
@@ -130,7 +202,7 @@ Design decisions:
 
 `pipeline validate` reads the staging tables into pandas, cleans and types them
 (`transform.py`) and runs the data-quality checks (`quality.py`). It writes nothing, so it
-is always safe to run. Loading the star schema comes in the next milestone.
+is always safe to run. `pipeline load-warehouse` runs the same step before it loads.
 
 Cleaning (every function is pure: DataFrame in, new DataFrame out):
 
