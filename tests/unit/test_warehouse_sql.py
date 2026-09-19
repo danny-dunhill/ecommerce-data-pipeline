@@ -4,6 +4,7 @@ from ecom_pipeline.warehouse import (
     FACT_KEY,
     FACT_TABLE,
     FACT_VALUE_COLUMNS,
+    analytics_statements,
     create_fact_load_table_sql,
     create_load_table_sql,
     schema_statements,
@@ -92,3 +93,46 @@ def test_fact_upsert_replaces_business_ids_with_surrogate_keys():
     assert "p.product_key" in sql
     assert "order_id = EXCLUDED.order_id" not in sql
     assert "IS DISTINCT FROM" in sql
+
+
+# --- analytical views --------------------------------------------------------------------
+
+VIEWS = ("sales_items", "monthly_revenue", "top_products", "customer_orders", "repeat_customers")
+
+
+def index_of(statements: list[str], start: str) -> int:
+    (position,) = [i for i, statement in enumerate(statements) if statement.startswith(start)]
+    return position
+
+
+def test_analytics_file_drops_and_creates_every_view():
+    statements = analytics_statements()
+
+    assert statements[0] == "CREATE SCHEMA IF NOT EXISTS analytics"
+    for view in VIEWS:
+        drop = index_of(statements, f"DROP VIEW IF EXISTS analytics.{view}")
+        create = index_of(statements, f"CREATE VIEW analytics.{view} ")
+        assert drop < create, f"{view} must be dropped before it is created"
+
+
+def test_views_are_dropped_before_the_views_they_are_built_on():
+    statements = analytics_statements()
+
+    def drop(view):
+        return index_of(statements, f"DROP VIEW IF EXISTS analytics.{view}")
+
+    def create(view):
+        return index_of(statements, f"CREATE VIEW analytics.{view} ")
+
+    # repeat_customers reads customer_orders, and every view reads sales_items
+    assert drop("repeat_customers") < drop("customer_orders") < drop("sales_items")
+    assert create("sales_items") < create("customer_orders") < create("repeat_customers")
+
+
+def test_every_view_starts_from_the_same_definition_of_a_sale():
+    statements = analytics_statements()
+
+    for view in ("monthly_revenue", "top_products", "customer_orders"):
+        statement = statements[index_of(statements, f"CREATE VIEW analytics.{view} ")]
+        assert "analytics.sales_items" in statement
+        assert "dw.fact_orders" not in statement  # never bypass the shared definition

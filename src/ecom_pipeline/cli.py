@@ -13,7 +13,9 @@ import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
+from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
 
 import psycopg
 import typer
@@ -33,6 +35,7 @@ from ecom_pipeline.quality import (
     has_errors,
     run_checks,
 )
+from ecom_pipeline.reports import REPORTS, fetch_report, format_table
 from ecom_pipeline.sample import make_sample
 from ecom_pipeline.staging import LoadError, load_staging, read_staging
 from ecom_pipeline.tables import TABLES
@@ -55,6 +58,14 @@ def _load_settings_or_exit() -> Settings:
     except ConfigError as exc:
         logger.error("%s", exc)
         raise typer.Exit(code=2) from exc
+
+
+class ReportName(StrEnum):
+    """The reports of ``pipeline report`` (must match the keys of ``reports.REPORTS``)."""
+
+    MONTHLY_REVENUE = "monthly-revenue"
+    TOP_PRODUCTS = "top-products"
+    REPEAT_CUSTOMERS = "repeat-customers"
 
 
 @contextmanager
@@ -201,6 +212,22 @@ def run(
     with _database("running the pipeline") as engine:
         load_staging(engine, data_dir)
         _load_validated_warehouse(engine)
+
+
+@app.command()
+def report(
+    name: Annotated[ReportName, typer.Argument(help="Which report to print.")],
+    limit: Annotated[
+        int, typer.Option("--limit", "-n", min=1, help="Maximum number of rows to print.")
+    ] = 20,
+) -> None:
+    """Print an analytical report from the `analytics` views (load the warehouse first)."""
+    selected = REPORTS[name.value]
+    with _database("reading the report") as engine:
+        columns, rows = fetch_report(engine, selected, limit)
+
+    typer.echo(f"{selected.description}\n")
+    typer.echo(format_table(columns, rows))
 
 
 @app.command("make-sample")

@@ -1,4 +1,5 @@
-"""Load the star schema into PostgreSQL (schema ``dw``) with upserts.
+"""Load the star schema into PostgreSQL (schema ``dw``) with upserts, then (re)create the
+analytical views (schema ``analytics``).
 
 How one table is loaded:
 
@@ -13,7 +14,7 @@ Design decisions:
 * **Idempotent:** running the load again with the same data changes nothing. The
   ``WHERE ... IS DISTINCT FROM`` in the upsert skips rows that did not change, so they
   are not even rewritten. Surrogate keys stay stable between runs.
-* **Atomic:** the schema, all dimensions and the fact table are loaded in one
+* **Atomic:** the schema, all dimensions, the fact table and the views are loaded in one
   transaction. If anything fails, the warehouse stays exactly as it was.
 * **Facts find their dimension rows by business key.** The fact rows carry ``customer_id``
   and ``product_id``, and the database swaps them for ``customer_key`` and
@@ -96,10 +97,19 @@ def split_statements(script: str) -> list[str]:
     return [statement.strip() for statement in "\n".join(lines).split(";") if statement.strip()]
 
 
+def _sql_file_statements(name: str) -> list[str]:
+    script = resources.files("ecom_pipeline").joinpath(f"sql/{name}").read_text("utf-8")
+    return split_statements(script)
+
+
 def schema_statements() -> list[str]:
     """The statements of ``star_schema.sql`` (packaged next to this module)."""
-    script = resources.files("ecom_pipeline").joinpath("sql/star_schema.sql").read_text("utf-8")
-    return split_statements(script)
+    return _sql_file_statements("star_schema.sql")
+
+
+def analytics_statements() -> list[str]:
+    """The statements of ``analytics_views.sql``: drop and re-create all views."""
+    return _sql_file_statements("analytics_views.sql")
 
 
 def _qualified(table: str) -> str:
@@ -236,7 +246,7 @@ def _load_facts(connection: Connection, frame: pd.DataFrame) -> int:
 
 
 def load_star(engine: Engine, star: StarData) -> dict[str, int]:
-    """Create the schema if needed and upsert all tables in one transaction.
+    """Create the schema if needed, upsert all tables and re-create the views (one transaction).
 
     Returns:
         Mapping of warehouse table name to the number of rows that were processed.
@@ -259,6 +269,8 @@ def load_star(engine: Engine, star: StarData) -> dict[str, int]:
                 connection, dimension, frames[dimension.name]
             )
         row_counts[FACT_TABLE] = _load_facts(connection, star.fact_orders)
+        for statement in analytics_statements():  # views last: they read the tables above
+            connection.execute(text(statement))
     return row_counts
 
 

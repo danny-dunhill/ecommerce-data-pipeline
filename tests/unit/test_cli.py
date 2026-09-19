@@ -3,7 +3,8 @@ from sqlalchemy.exc import OperationalError
 from typer.testing import CliRunner
 
 from ecom_pipeline import __version__
-from ecom_pipeline.cli import app
+from ecom_pipeline.cli import ReportName, app
+from ecom_pipeline.reports import REPORTS
 from ecom_pipeline.staging import LoadError
 from sample_data import raw_frames, write_dataset
 
@@ -34,6 +35,7 @@ def test_no_arguments_shows_help():
         "validate",
         "load-warehouse",
         "run",
+        "report",
         "make-sample",
         "version",
     ):
@@ -301,3 +303,51 @@ def test_run_stops_with_code_3_when_source_files_are_missing(monkeypatch, tmp_pa
 
     assert result.exit_code == 3
     assert "file not found" in result.output
+
+
+def test_report_names_of_the_command_match_the_available_reports():
+    assert {name.value for name in ReportName} == set(REPORTS)
+
+
+def test_report_prints_the_description_and_a_table(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+    calls = []
+
+    def fake_fetch(engine, report, limit):
+        calls.append((report.name, limit))
+        return ["month_start", "revenue"], [("2017-01-01", 55)]
+
+    monkeypatch.setattr("ecom_pipeline.cli.fetch_report", fake_fetch)
+
+    result = runner.invoke(app, ["report", "monthly-revenue", "--limit", "5"])
+
+    assert result.exit_code == 0
+    assert calls == [("monthly-revenue", 5)]
+    assert "Revenue, orders and growth per month" in result.output
+    assert "2017-01-01" in result.output
+
+
+def test_report_exits_with_code_3_when_the_warehouse_was_not_loaded(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+pysqlite:///:memory:")
+
+    def not_loaded(engine, report, limit):
+        raise LoadError("The view analytics.top_products does not exist. Run `pipeline run`.")
+
+    monkeypatch.setattr("ecom_pipeline.cli.fetch_report", not_loaded)
+
+    result = runner.invoke(app, ["report", "top-products"])
+
+    assert result.exit_code == 3
+    assert "pipeline run" in result.output
+
+
+def test_report_rejects_an_unknown_report_name():
+    result = runner.invoke(app, ["report", "profit"])
+
+    assert result.exit_code == 2
+
+
+def test_report_rejects_a_limit_below_one():
+    result = runner.invoke(app, ["report", "top-products", "--limit", "0"])
+
+    assert result.exit_code == 2

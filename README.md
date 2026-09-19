@@ -6,9 +6,9 @@ and Docker.
 
 ![CI](https://github.com/danny-dunhill/ecommerce-data-pipeline/actions/workflows/ci.yml/badge.svg)
 
-> **Status:** work in progress. Milestones 1 to 4 are done: the pipeline runs from the CSV
-> files to a star schema in PostgreSQL. Analytical views and polish are next, see the
-> [roadmap](#roadmap).
+> **Status:** work in progress. Milestones 1 to 5 are done: the pipeline runs from the CSV
+> files to a star schema and analytical views in PostgreSQL. Polish and an optional
+> dashboard are next, see the [roadmap](#roadmap).
 
 ## Architecture
 
@@ -18,7 +18,8 @@ flowchart LR
     B --> C[(PostgreSQL<br/>staging schema)]
     C --> D[Transform + validate<br/>pandas]
     D --> E[(PostgreSQL<br/>star schema)]
-    E -.-> F[Analytical SQL views]
+    E --> F[Analytical SQL views]
+    F -.-> G[Dashboard]
 ```
 
 Solid arrows are implemented, dotted arrows are planned. The star schema contains
@@ -83,6 +84,9 @@ pipeline load-staging                         # load the full data from data/raw
 pipeline validate                             # clean the staging data and run quality checks
 pipeline load-warehouse                       # validate, then load the star schema
 pipeline run --data-dir data/sample           # all of the above in one command
+pipeline report monthly-revenue               # print an analytical report
+pipeline report top-products --limit 10
+pipeline report repeat-customers
 ```
 
 Run `pipeline --help` for all commands. Exit codes: `0` success, `1` database problem,
@@ -234,6 +238,35 @@ Design decisions:
   the source is not deleted. The schema script creates missing tables but does not migrate
   existing ones (a real project would use Alembic or dbt).
 
+## Analytics
+
+The `analytics` schema is the layer that analysts and BI tools query. It consists of SQL
+views, defined in
+[`src/ecom_pipeline/sql/analytics_views.sql`](src/ecom_pipeline/sql/analytics_views.sql) and
+re-created on every load (a view holds no data, so it is simply dropped and created again).
+
+| View                            | Answers                                                              |
+| ------------------------------- | -------------------------------------------------------------------- |
+| `analytics.sales_items`         | The one definition of "a sale": items of orders that were not canceled or unavailable |
+| `analytics.monthly_revenue`     | Revenue, orders, items, freight, average order value and growth per month |
+| `analytics.top_products`        | Every sold product ranked by revenue (`revenue_rank`)                |
+| `analytics.customer_orders`     | Orders and revenue per real person (`customer_unique_id`)            |
+| `analytics.repeat_customers`    | How many customers ordered more than once, and their share of revenue |
+
+Design decisions:
+
+- **One definition of revenue.** All views start from `analytics.sales_items`, so they can
+  never disagree about what counts as a sale. Revenue is the item price without freight.
+- **Repeat customers are counted per person**, not per `customer_id` (which changes with
+  every order in the source data).
+- **Window functions** (`lag`, `rank`) give the month-over-month growth and the product
+  ranking in SQL, where the data is, instead of in Python.
+- **Division by zero is handled** (`nullif`), so the views also work on an empty warehouse.
+
+`pipeline report <name>` prints a view as a table. More queries you can run in any SQL
+client are in [`sql/example_queries.sql`](sql/example_queries.sql): revenue by state and
+category, weekday versus weekend, delivery time.
+
 ## Development
 
 ```bash
@@ -251,7 +284,7 @@ skipped automatically if the database is not reachable, and they always run in C
 - [x] 2. Extract: validate the CSV files and load them into a staging schema (idempotent)
 - [x] 3. Transform and validate: cleaning, typing, data-quality checks (`pipeline validate`)
 - [x] 4. Load: star schema with upserts (`pipeline load-warehouse`, `pipeline run`)
-- [ ] 5. Analytics: SQL views (monthly revenue, top products, repeat customers)
+- [x] 5. Analytics: SQL views (monthly revenue, top products, repeat customers) and `pipeline report`
 - [ ] 6. Polish: documentation, coverage, example results
 - [ ] 7. Optional: dashboard, Airflow orchestration
 

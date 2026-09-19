@@ -46,10 +46,11 @@ def clean_staging(engine):
 
 @pytest.fixture
 def clean_warehouse(engine):
-    """Start and finish each test without the ``dw`` schema (the star schema)."""
+    """Start and finish each test without the ``dw`` and ``analytics`` schemas."""
 
     def drop_schema():
         with engine.begin() as connection:
+            connection.execute(text("DROP SCHEMA IF EXISTS analytics CASCADE"))
             connection.execute(text("DROP SCHEMA IF EXISTS dw CASCADE"))
 
     drop_schema()
