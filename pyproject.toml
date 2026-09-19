@@ -42,6 +42,11 @@ src = ["src", "tests"]
 # B = likely bugs, SIM = simplifications
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# Typer declares command options as default values (`x: int = typer.Option(...)`),
+# which is its documented style. These calls are safe, so B008 must not flag them.
+extend-immutable-calls = ["typer.Option", "pathlib.Path"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --cov=ecom_pipeline --cov-report=term-missing"
