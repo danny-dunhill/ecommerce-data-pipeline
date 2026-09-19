@@ -218,7 +218,13 @@ def run(
 def report(
     name: Annotated[ReportName, typer.Argument(help="Which report to print.")],
     limit: Annotated[
-        int, typer.Option("--limit", "-n", min=1, help="Maximum number of rows to print.")
+        int,
+        typer.Option(
+            "--limit",
+            "-n",
+            min=1,
+            help="Maximum number of rows to print (monthly-revenue: the latest months).",
+        ),
     ] = 20,
 ) -> None:
     """Print an analytical report from the `analytics` views (load the warehouse first)."""

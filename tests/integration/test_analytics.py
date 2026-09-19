@@ -8,6 +8,7 @@ from sqlalchemy import text
 from typer.testing import CliRunner
 
 from ecom_pipeline.cli import app
+from ecom_pipeline.reports import REPORTS, fetch_report
 from ecom_pipeline.transform import transform
 from ecom_pipeline.warehouse import load_warehouse
 from sample_data import raw_frames, write_dataset
@@ -54,6 +55,37 @@ def test_monthly_revenue_shows_growth_against_the_previous_month(engine, clean_w
 
     assert [(str(m), r) for m, r, _ in result] == [("2017-01-01", 50), ("2017-02-01", 5)]
     assert result[1][2] == -90  # from 50 down to 5
+
+
+def test_growth_is_empty_after_a_month_without_sales(engine, clean_warehouse, clean):
+    orders = clean.orders.copy()
+    # January and March have sales, February has none: March is not "month over month"
+    orders.loc[orders["order_id"] == "o3", "order_purchase_timestamp"] = pd.Timestamp("2017-03-10")
+    load_warehouse(engine, replace(clean, orders=orders))
+
+    result = rows(
+        engine,
+        "SELECT month_start, revenue_growth_pct FROM analytics.monthly_revenue"
+        " ORDER BY month_start",
+    )
+
+    assert [(str(month), growth) for month, growth in result] == [
+        ("2017-01-01", None),
+        ("2017-03-01", None),
+    ]
+
+
+def test_monthly_report_with_a_limit_keeps_the_latest_months(engine, clean_warehouse, clean):
+    orders = clean.orders.copy()
+    orders.loc[orders["order_id"] == "o3", "order_purchase_timestamp"] = pd.Timestamp("2017-02-10")
+    load_warehouse(engine, replace(clean, orders=orders))
+    report = REPORTS["monthly-revenue"]
+
+    _, latest = fetch_report(engine, report, limit=1)
+    _, both = fetch_report(engine, report, limit=5)
+
+    assert [str(row[2]) for row in latest] == ["2017-02-01"]
+    assert [str(row[2]) for row in both] == ["2017-01-01", "2017-02-01"]  # oldest first
 
 
 def test_canceled_orders_do_not_count_as_sales(engine, clean_warehouse, clean):

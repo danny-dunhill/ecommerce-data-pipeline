@@ -31,8 +31,13 @@ REPORTS: dict[str, Report] = {
         Report(
             name="monthly-revenue",
             view="monthly_revenue",
-            sql="SELECT * FROM analytics.monthly_revenue ORDER BY month_start LIMIT :limit",
-            description="Revenue, orders and growth per month",
+            # the LIMIT keeps the *latest* months (they matter most), printed oldest first
+            sql=(
+                "SELECT * FROM ("
+                "SELECT * FROM analytics.monthly_revenue ORDER BY month_start DESC LIMIT :limit"
+                ") AS latest ORDER BY month_start"
+            ),
+            description="Revenue, orders and growth per month (the latest months)",
         ),
         Report(
             name="top-products",

@@ -28,7 +28,8 @@ FROM dw.fact_orders
 WHERE order_status NOT IN ('canceled', 'unavailable');
 
 -- Revenue per calendar month. "revenue" is the item price without freight.
--- revenue_growth_pct compares with the previous month that has sales.
+-- revenue_growth_pct is the change against the previous calendar month. It is empty (NULL)
+-- when that month has no sales: a comparison across a gap would not be month-over-month.
 CREATE VIEW analytics.monthly_revenue AS
 WITH monthly AS (
     SELECT
@@ -42,6 +43,14 @@ WITH monthly AS (
     FROM analytics.sales_items AS s
     JOIN dw.dim_date AS d ON d.date_key = s.order_date_key
     GROUP BY d.year, d.month
+),
+with_previous AS (
+    -- lag() looks at the previous row, which is the previous month only if there is no gap
+    SELECT
+        monthly.*,
+        lag(month_start) OVER (ORDER BY month_start) AS previous_month,
+        lag(revenue) OVER (ORDER BY month_start) AS previous_revenue
+    FROM monthly
 )
 SELECT
     year,
@@ -52,12 +61,11 @@ SELECT
     revenue,
     freight,
     round(revenue / orders, 2) AS avg_order_value,
-    round(
-        100.0 * (revenue - lag(revenue) OVER (ORDER BY month_start))
-        / nullif(lag(revenue) OVER (ORDER BY month_start), 0),
-        1
-    ) AS revenue_growth_pct
-FROM monthly;
+    CASE
+        WHEN previous_month + INTERVAL '1 month' = month_start THEN
+            round(100.0 * (revenue - previous_revenue) / nullif(previous_revenue, 0), 1)
+    END AS revenue_growth_pct
+FROM with_previous;
 
 -- Every product that was sold, ranked by revenue (1 = best seller). Ties share a rank.
 CREATE VIEW analytics.top_products AS

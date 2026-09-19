@@ -260,10 +260,13 @@ Design decisions:
 - **Repeat customers are counted per person**, not per `customer_id` (which changes with
   every order in the source data).
 - **Window functions** (`lag`, `rank`) give the month-over-month growth and the product
-  ranking in SQL, where the data is, instead of in Python.
+  ranking in SQL, where the data is, instead of in Python. `lag` looks at the previous
+  *row*, so growth is only reported when that row is really the previous calendar month;
+  after a month without sales it is empty instead of a misleading multi-month change.
 - **Division by zero is handled** (`nullif`), so the views also work on an empty warehouse.
 
-`pipeline report <name>` prints a view as a table. More queries you can run in any SQL
+`pipeline report <name>` prints a view as a table (`--limit N` sets the number of rows;
+for `monthly-revenue` it keeps the *latest* N months). More queries you can run in any SQL
 client are in [`sql/example_queries.sql`](sql/example_queries.sql): revenue by state and
 category, weekday versus weekend, delivery time.
 
